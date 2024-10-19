@@ -1,51 +1,77 @@
 const express = require('express');
-const mongoose = require('mongoose'); // Import Mongoose
-const Budget = require('./models/Budget'); // Import the Mongoose model
+const mongoose = require('mongoose');
+const fs = require('fs');
+const path = require('path');
 const app = express();
+const Budget = require('./models/Budget_schema'); // Import the Budget model
 const port = 3002;
 
+// Middleware to parse JSON data
+app.use(express.json());
+
+// Load budget-data.json on server startup
+let staticBudgetData = [];
+const jsonDataPath = path.join(__dirname, 'budget-data.json');
+fs.readFile(jsonDataPath, 'utf8', (err, data) => {
+    if (err) {
+        console.error('Error reading budget-data.json:', err);
+    } else {
+        staticBudgetData = JSON.parse(data).myBudget; // Parse the myBudget array from JSON
+        console.log('Loaded static budget data from JSON file');
+    }
+});
+
+// Connect to MongoDB using Mongoose
+mongoose.connect('mongodb://localhost:27017/mydatabase')
+    .then(() => console.log('Connected to MongoDB'))
+    .catch(err => console.error('Could not connect to MongoDB...', err));
+
+// Default route to serve static files
 app.use('/', express.static('public'));
-app.use(express.json()); // Middleware to parse JSON
 
-// Connect to MongoDB without deprecated options
-mongoose.connect('mongodb://localhost:27017/budgetDB')
-    .then(() => {
-        console.log('Connected to MongoDB');
-    })
-    .catch((error) => {
-        console.error('Error connecting to MongoDB:', error);
-    });
-
-// Endpoint to fetch budget data from MongoDB
+// Endpoint to fetch all budget data (from MongoDB and JSON)
 app.get('/budget', async (req, res) => {
     try {
-        const budgetData = await Budget.find(); // Fetch data from MongoDB
-        res.json(budgetData);
-    } catch (error) {
-        res.status(500).json({ message: 'Error fetching data', error });
+        const dbBudgets = await Budget.find();  // Fetch all budget entries from MongoDB
+
+        // Format the MongoDB data to match the format from the JSON file
+        const formattedDbBudgets = dbBudgets.map(budget => ({
+            title: budget.title,
+            budget: budget.budget,
+            color: budget.color
+        }));
+
+        // Combine the static JSON data with the MongoDB data
+        const combinedBudgets = [...formattedDbBudgets, ...staticBudgetData];
+
+        res.json(combinedBudgets);  // Send the combined data to the frontend
+    } catch (err) {
+        res.status(500).send('Error fetching budget data');
     }
 });
 
-// Endpoint to add new budget data (for testing in Postman)
+// Endpoint to add new budget data to MongoDB
 app.post('/budget', async (req, res) => {
-    const { title, value, color } = req.body;
+    const { title, budget, color } = req.body;
 
-    if (!title || !value || !color) {
-        return res.status(400).json({ message: 'All fields are required' });
+    // Validate that the required fields are provided
+    if (!title || !budget || !color) {
+        return res.status(400).send('All fields (title, budget, color) are required');
     }
+
+    // Create a new budget document
+    const newBudget = new Budget({
+        title,
+        budget,
+        color
+    });
 
     try {
-        const newBudget = new Budget({ title, value, color });
-        await newBudget.save(); // Save the new entry to MongoDB
-        res.status(201).json(newBudget);
-    } catch (error) {
-        res.status(500).json({ message: 'Error saving data', error });
+        const savedBudget = await newBudget.save();  // Save the new entry to MongoDB
+        res.json(savedBudget);  // Respond with the newly created document
+    } catch (err) {
+        res.status(400).send(err.message);  // Handle validation errors
     }
-});
-
-// Test endpoint
-app.get('/hello', (req, res) => {
-    res.send('Hello World!');
 });
 
 // Start the server
